@@ -26,6 +26,7 @@ along with this program.  If not, see <http://www.gnu.org/licenses/>.
 #include <unity.h>
 
 #ifndef _WIN32
+#include <unistd.h>
 #define closesocket close
 #endif
 
@@ -59,6 +60,7 @@ struct test_events_t : zmq::i_poll_events
         fd (fd_),
         poller (poller_)
     {
+        (void)fd;
     }
 
     virtual void in_event ()

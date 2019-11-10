@@ -56,8 +56,11 @@ zmq::io_thread_t::~io_thread_t ()
 
 void zmq::io_thread_t::start ()
 {
+    char name[16] = "";
+    snprintf (name, sizeof (name), "IO/%u",
+              get_tid () - zmq::ctx_t::reaper_tid - 1);
     //  Start the underlying I/O thread.
-    _poller->start ();
+    _poller->start (name);
 }
 
 void zmq::io_thread_t::stop ()

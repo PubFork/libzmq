@@ -32,6 +32,7 @@
 #include "err.hpp"
 #include "macros.hpp"
 #include "config.hpp"
+#include "address.hpp"
 
 #if !defined ZMQ_HAVE_WINDOWS
 #include <fcntl.h>
@@ -83,8 +84,9 @@ zmq::fd_t zmq::open_socket (int domain_, int type_, int protocol_)
 #if defined ZMQ_HAVE_WINDOWS && defined WSA_FLAG_NO_HANDLE_INHERIT
     // if supported, create socket with WSA_FLAG_NO_HANDLE_INHERIT, such that
     // the race condition in making it non-inheritable later is avoided
-    const fd_t s = WSASocket (domain_, type_, protocol_, NULL, 0,
-                              WSA_FLAG_NO_HANDLE_INHERIT);
+    const fd_t s =
+      WSASocket (domain_, type_, protocol_, NULL, 0,
+                 WSA_FLAG_OVERLAPPED || WSA_FLAG_NO_HANDLE_INHERIT);
 #else
     const fd_t s = socket (domain_, type_, protocol_);
 #endif
@@ -127,7 +129,8 @@ void zmq::enable_ipv4_mapping (fd_t s_)
 {
     LIBZMQ_UNUSED (s_);
 
-#if defined IPV6_V6ONLY && !defined ZMQ_HAVE_OPENBSD
+#if defined IPV6_V6ONLY && !defined ZMQ_HAVE_OPENBSD                           \
+  && !defined ZMQ_HAVE_DRAGONFLY
 #ifdef ZMQ_HAVE_WINDOWS
     DWORD flag = 0;
 #else
@@ -145,39 +148,28 @@ void zmq::enable_ipv4_mapping (fd_t s_)
 
 int zmq::get_peer_ip_address (fd_t sockfd_, std::string &ip_addr_)
 {
-    int rc;
     struct sockaddr_storage ss;
 
-#if defined ZMQ_HAVE_HPUX || defined ZMQ_HAVE_WINDOWS                          \
-  || defined ZMQ_HAVE_VXWORKS
-    int addrlen = static_cast<int> (sizeof ss);
-#else
-    socklen_t addrlen = sizeof ss;
-#endif
-    rc = getpeername (sockfd_, reinterpret_cast<struct sockaddr *> (&ss),
-                      &addrlen);
+    zmq_socklen_t addrlen =
+      get_socket_address (sockfd_, socket_end_remote, &ss);
+
+    if (addrlen == 0) {
 #ifdef ZMQ_HAVE_WINDOWS
-    if (rc == SOCKET_ERROR) {
         const int last_error = WSAGetLastError ();
         wsa_assert (last_error != WSANOTINITIALISED && last_error != WSAEFAULT
                     && last_error != WSAEINPROGRESS
                     && last_error != WSAENOTSOCK);
-        return 0;
-    }
-#else
-    if (rc == -1) {
-#if !defined(TARGET_OS_IPHONE) || !TARGET_OS_IPHONE
+#elif !defined(TARGET_OS_IPHONE) || !TARGET_OS_IPHONE
         errno_assert (errno != EBADF && errno != EFAULT && errno != ENOTSOCK);
 #else
         errno_assert (errno != EFAULT && errno != ENOTSOCK);
 #endif
         return 0;
     }
-#endif
 
     char host[NI_MAXHOST];
-    rc = getnameinfo (reinterpret_cast<struct sockaddr *> (&ss), addrlen, host,
-                      sizeof host, NULL, 0, NI_NUMERICHOST);
+    int rc = getnameinfo (reinterpret_cast<struct sockaddr *> (&ss), addrlen,
+                          host, sizeof host, NULL, 0, NI_NUMERICHOST);
     if (rc != 0)
         return 0;
 
@@ -237,20 +229,23 @@ int zmq::set_nosigpipe (fd_t s_)
     return 0;
 }
 
-void zmq::bind_to_device (fd_t s_, std::string &bound_device_)
+int zmq::bind_to_device (fd_t s_, const std::string &bound_device_)
 {
 #ifdef ZMQ_HAVE_SO_BINDTODEVICE
     int rc = setsockopt (s_, SOL_SOCKET, SO_BINDTODEVICE,
                          bound_device_.c_str (), bound_device_.length ());
-
-#ifdef ZMQ_HAVE_WINDOWS
-    wsa_assert (rc != SOCKET_ERROR);
-#else
-    errno_assert (rc == 0);
-#endif
+    if (rc != 0) {
+        assert_success_or_recoverable (s_, rc);
+        return -1;
+    } else {
+        return 0;
+    }
 #else
     LIBZMQ_UNUSED (s_);
     LIBZMQ_UNUSED (bound_device_);
+
+    errno = ENOTSUP;
+    return -1;
 #endif
 }
 
@@ -436,9 +431,6 @@ int zmq::make_fdpair (fd_t *r_, fd_t *w_)
     *w_ = open_socket (AF_INET, SOCK_STREAM, 0);
     wsa_assert (*w_ != INVALID_SOCKET);
 
-    //  Set TCP_NODELAY on writer socket.
-    tune_socket (*w_);
-
     if (sync != NULL) {
         //  Enter the critical section.
         DWORD dwrc = WaitForSingleObject (sync, INFINITE);
@@ -457,17 +449,23 @@ int zmq::make_fdpair (fd_t *r_, fd_t *w_)
     }
 
     //  Listen for incoming connections.
-    if (rc != SOCKET_ERROR)
+    if (rc != SOCKET_ERROR) {
         rc = listen (listener, 1);
+    }
 
     //  Connect writer to the listener.
-    if (rc != SOCKET_ERROR)
+    if (rc != SOCKET_ERROR) {
         rc = connect (*w_, reinterpret_cast<struct sockaddr *> (&addr),
                       sizeof addr);
+    }
 
     //  Accept connection from writer.
-    if (rc != SOCKET_ERROR)
+    if (rc != SOCKET_ERROR) {
+        //  Set TCP_NODELAY on writer socket.
+        tune_socket (*w_);
+
         *r_ = accept (listener, NULL, NULL);
+    }
 
     //  Send/receive large chunk to work around TCP slow start
     //  This code is a workaround for #1608
@@ -676,5 +674,56 @@ void zmq::make_socket_noninheritable (fd_t sock_)
     errno_assert (rc != -1);
 #else
     LIBZMQ_UNUSED (sock_);
+#endif
+}
+
+void zmq::assert_success_or_recoverable (zmq::fd_t s_, int rc_)
+{
+#ifdef ZMQ_HAVE_WINDOWS
+    if (rc_ != SOCKET_ERROR) {
+        return;
+    }
+#else
+    if (rc_ != -1) {
+        return;
+    }
+#endif
+
+    //  Check whether an error occurred
+    int err = 0;
+#if defined ZMQ_HAVE_HPUX || defined ZMQ_HAVE_VXWORKS
+    int len = sizeof err;
+#else
+    socklen_t len = sizeof err;
+#endif
+
+    int rc = getsockopt (s_, SOL_SOCKET, SO_ERROR,
+                         reinterpret_cast<char *> (&err), &len);
+
+    //  Assert if the error was caused by 0MQ bug.
+    //  Networking problems are OK. No need to assert.
+#ifdef ZMQ_HAVE_WINDOWS
+    zmq_assert (rc == 0);
+    if (err != 0) {
+        wsa_assert (err == WSAECONNREFUSED || err == WSAECONNRESET
+                    || err == WSAECONNABORTED || err == WSAEINTR
+                    || err == WSAETIMEDOUT || err == WSAEHOSTUNREACH
+                    || err == WSAENETUNREACH || err == WSAENETDOWN
+                    || err == WSAENETRESET || err == WSAEACCES
+                    || err == WSAEINVAL || err == WSAEADDRINUSE);
+    }
+#else
+    //  Following code should handle both Berkeley-derived socket
+    //  implementations and Solaris.
+    if (rc == -1)
+        err = errno;
+    if (err != 0) {
+        errno = err;
+        errno_assert (errno == ECONNREFUSED || errno == ECONNRESET
+                      || errno == ECONNABORTED || errno == EINTR
+                      || errno == ETIMEDOUT || errno == EHOSTUNREACH
+                      || errno == ENETUNREACH || errno == ENETDOWN
+                      || errno == ENETRESET || errno == EINVAL);
+    }
 #endif
 }

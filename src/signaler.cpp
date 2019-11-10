@@ -77,10 +77,7 @@ static int sleep_ms (unsigned int ms_)
 {
     if (ms_ == 0)
         return 0;
-#if defined ZMQ_HAVE_WINDOWS
-    Sleep (ms_ > 0 ? ms_ : INFINITE);
-    return 0;
-#elif defined ZMQ_HAVE_ANDROID
+#if defined ZMQ_HAVE_ANDROID
     usleep (ms_ * 1000);
     return 0;
 #elif defined ZMQ_HAVE_VXWORKS
@@ -266,7 +263,7 @@ int zmq::signaler_t::wait (int timeout_)
 
 #elif defined ZMQ_POLL_BASED_ON_SELECT
 
-    optimized_fd_set_t fds (FD_SETSIZE);
+    optimized_fd_set_t fds (1);
     FD_ZERO (fds.get ());
     FD_SET (_r, fds.get ());
     struct timeval timeout;

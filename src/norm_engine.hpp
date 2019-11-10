@@ -47,7 +47,7 @@ class norm_engine_t : public io_object_t, public i_engine
 
     virtual void zap_msg_available (){};
 
-    virtual const char *get_endpoint () const;
+    virtual const endpoint_uri_pair_t &get_endpoint () const;
 
     // i_poll_events interface implementation.
     // (we only need in_event() for NormEvent notification)
@@ -71,7 +71,8 @@ class norm_engine_t : public io_object_t, public i_engine
       public:
         NormRxStreamState (NormObjectHandle normStream,
                            int64_t maxMsgSize,
-                           bool zeroCopy);
+                           bool zeroCopy,
+                           int inBatchSize);
         ~NormRxStreamState ();
 
         NormObjectHandle GetStreamHandle () const { return norm_stream; }
@@ -87,7 +88,7 @@ class norm_engine_t : public io_object_t, public i_engine
         // These are used to feed data to decoder
         // and its underlying "msg" buffer
         char *AccessBuffer () { return (char *) (buffer_ptr + buffer_count); }
-        size_t GetBytesNeeded () const { return (buffer_size - buffer_count); }
+        size_t GetBytesNeeded () const { return buffer_size - buffer_count; }
         void IncrementBufferCount (size_t count) { buffer_count += count; }
         msg_t *AccessMsg () { return zmq_decoder->msg (); }
         // This invokes the decoder "decode" method
@@ -106,7 +107,7 @@ class norm_engine_t : public io_object_t, public i_engine
             void Append (NormRxStreamState &item);
             void Remove (NormRxStreamState &item);
 
-            bool IsEmpty () const { return (NULL == head); }
+            bool IsEmpty () const { return NULL == head; }
 
             void Destroy ();
 
@@ -136,6 +137,7 @@ class norm_engine_t : public io_object_t, public i_engine
         NormObjectHandle norm_stream;
         int64_t max_msg_size;
         bool zero_copy;
+        int in_batch_size;
         bool in_sync;
         bool rx_ready;
         v2_decoder_t *zmq_decoder;
@@ -149,6 +151,8 @@ class norm_engine_t : public io_object_t, public i_engine
         NormRxStreamState::List *list;
 
     }; // end class zmq::norm_engine_t::NormRxStreamState
+
+    const endpoint_uri_pair_t _empty_endpoint;
 
     session_base_t *zmq_session;
     options_t options;

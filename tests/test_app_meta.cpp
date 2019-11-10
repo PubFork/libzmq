@@ -28,8 +28,10 @@
 */
 
 #include "testutil.hpp"
+#include "testutil_unity.hpp"
 #include <unity.h>
 
+#include <string.h>
 
 void setUp ()
 {
@@ -43,6 +45,7 @@ void test_app_meta_reqrep ()
     void *ctx;
     zmq_msg_t msg;
     void *rep_sock, *req_sock;
+    char connect_address[MAX_SOCKET_STRING];
     const char *req_hello = "X-hello:hello";
     const char *req_connection = "X-connection:primary";
     const char *req_z85 = "X-bin:009c6";
@@ -84,8 +87,7 @@ void test_app_meta_reqrep ()
         TEST_ASSERT_EQUAL_INT (-1, rc);
     }
 
-    rc = zmq_bind (rep_sock, "tcp://127.0.0.1:5555");
-    TEST_ASSERT_EQUAL_INT (0, rc);
+    bind_loopback_ipv4 (rep_sock, connect_address, sizeof connect_address);
 
     l = 0;
     rc = zmq_setsockopt (req_sock, ZMQ_LINGER, &l, sizeof (l));
@@ -101,7 +103,7 @@ void test_app_meta_reqrep ()
     rc = zmq_setsockopt (req_sock, ZMQ_METADATA, req_z85, strlen (req_z85));
     TEST_ASSERT_EQUAL_INT (0, rc);
 
-    rc = zmq_connect (req_sock, "tcp://127.0.0.1:5555");
+    rc = zmq_connect (req_sock, connect_address);
     TEST_ASSERT_EQUAL_INT (0, rc);
 
     rc = zmq_msg_init_size (&msg, 1);

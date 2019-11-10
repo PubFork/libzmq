@@ -29,7 +29,10 @@
 
 #include "testutil.hpp"
 #include "testutil_unity.hpp"
+#include <string.h>
 #include <unity.h>
+#include <assert.h>
+#include <unistd.h>
 
 //
 // Asynchronous proxy test using ZMQ_XPUB_NODROP and HWM:
@@ -300,9 +303,7 @@ static void proxy_stats_asker_thread_main (void *pvoid)
     // Start!
 
     while (!zmq_atomic_counter_value (cfg->subscriber_received_all)) {
-#ifdef ZMQ_BUILD_DRAFT_API
         check_proxy_stats (control_req);
-#endif
         usleep (1000); // 1ms -> in best case we will get 1000updates/second
     }
 

@@ -32,11 +32,14 @@
 
 #include <string>
 
-#if !defined ZMQ_HAVE_WINDOWS && !defined ZMQ_HAVE_OPENVMS                     \
-  && !defined ZMQ_HAVE_VXWORKS
+#if defined ZMQ_HAVE_IPC
 
+#if defined _MSC_VER
+#include <afunix.h>
+#else
 #include <sys/socket.h>
 #include <sys/un.h>
+#endif
 
 namespace zmq
 {
@@ -57,7 +60,8 @@ class ipc_address_t
     socklen_t addrlen () const;
 
   private:
-    struct sockaddr_un address;
+    struct sockaddr_un _address;
+    socklen_t _addrlen;
 
     ipc_address_t (const ipc_address_t &);
     const ipc_address_t &operator= (const ipc_address_t &);
